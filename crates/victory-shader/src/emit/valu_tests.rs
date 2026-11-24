@@ -803,6 +803,7 @@ fn bfe_signed_and_unsigned_match_rdna2() {
     let v_unsigned = build_valu_cs(&vop3(0x148, 0, vgpr(1), vgpr(2), vgpr(3)));
     // s_bfe_i32 s6, s0, s1 (SOP2 opcode 0x28: s1 = off[4:0] | width[22:16]); v_mov_b32 v0, s6
     let s_signed = build_valu_cs(&[sop2(0x28, 6, 0, 1), vop1(0x001, 0, sgpr(6))]);
+    let s_unsigned = build_valu_cs(&[sop2(0x27, 6, 0, 1), vop1(0x001, 0, sgpr(6))]);
 
     let signed_cases: &[([u32; 4], u32)] = &[
         // Field crosses bit 31: extends from bit 31.
@@ -865,6 +866,22 @@ fn bfe_signed_and_unsigned_match_rdna2() {
             "{backend}: v_bfe_u32({:#010x}, {}, {}) = {got:#010x}, want {want:#010x}",
             inp[0], inp[1], inp[2],
         );
+    });
+
+    // The scalar width is seven bits. Width 32 keeps the high bit; a nonzero offset
+    // shifts it down without sign extension. Offset and width share the second SGPR.
+    let mut scalar_unsigned = unsigned_cases.to_vec();
+    scalar_unsigned.extend([
+        ([0x8000_0000, 0, 32, 0], 0x8000_0000),
+        ([0x8000_0000, 4, 32, 0], 0x0800_0000),
+        ([0x1234_5678, 8, 8, 0], 0x56),
+    ]);
+    let inputs: Vec<_> = scalar_unsigned
+        .iter()
+        .map(|&(inp, _)| [inp[0], inp[1] | (inp[2] << 16), 0, 0])
+        .collect();
+    run_cases(&s_unsigned, &inputs, |backend, i, inp, got| {
+        assert_eq!(got, scalar_unsigned[i].1, "{backend}: s_bfe_u32 {inp:x?}");
     });
 }
 
