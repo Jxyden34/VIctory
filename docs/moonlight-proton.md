@@ -63,9 +63,10 @@ Measurements below use the host's frame counter. The video stream has its own fr
 | GE-Proton with Microsoft D3DCompiler | The helper ran and the intro issued thousands of indirect draws. A restart doing anticipatory pipeline builds was especially slow. |
 | GE-Proton with on-demand pipelines and texture worker | Reached the intro again with the shader cache and saved pipelines reused. |
 | Steam Deck on the permanent Sunshine endpoint | Connected over HEVC at 1280×800 and enumerated a virtual DualSense. GPU monitoring confirmed separate rendering and encoding cards. The port later reported a title-side null write after about eight minutes in the intro. |
-| Windows Moonlight 6.2.0 on the permanent endpoint | Paired, launched the same app, and streamed over HEVC. With the texture memory fallback enabled, parts of loading reached 55–90 FPS and the 3D intro became visible. The intro generally ran below 1 FPS and some lighting and materials were missing. |
+| Windows Moonlight 6.2.0 on the permanent endpoint, `93db653` | Paired, launched the same app, and streamed over HEVC. With the texture memory fallback enabled, parts of loading reached 55–90 FPS and the 3D intro became visible. The intro generally ran below 1 FPS with missing lighting and materials. After about 15 minutes the title hit breakpoint `0x80000003` and its crash report showed `INSTANCE_LIST` at 45,000/45,000. |
+| Windows Moonlight cold-cache restart, `52ac4ec` | The saved DarkMatter tile relaunched the app after the runtime update. Sunshine connected over HEVC, the three frame hooks applied, and the new host pipeline library initialized. |
 
-The newer Proton build cleared the observed shader compiler failure. The latest stream reached rendered scenes, with copying and read-back still taking most of each frame. Playable frame rate, stable gameplay and a native Windows host run remain unverified.
+The newer Proton build cleared the observed shader compiler failure. The `93db653` stream reached rendered scenes, with copying and read-back still taking most of each frame. The later instance-pool failure matches the breakpoint and exhausted pool in another report. Playable frame rate, stable gameplay and a native Windows host run remain unverified. [VIctory issue #698](https://github.com/Marvisak/VIctory/issues/698)
 
 ## Sources
 
