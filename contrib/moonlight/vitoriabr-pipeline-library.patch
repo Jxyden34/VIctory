@@ -1,0 +1,49 @@
+diff --git a/crates/victory-gpu/src/pipeline/library.rs b/crates/victory-gpu/src/pipeline/library.rs
+index b993467..c8ad838 100644
+--- a/crates/victory-gpu/src/pipeline/library.rs
++++ b/crates/victory-gpu/src/pipeline/library.rs
+@@ -512,7 +512,32 @@ fn open(device: &ID3D12Device1, blob: Blob) -> Option<Library> {
+     {
+         tracing::warn!(error = %e, "the rejected host pipeline library could not be kept under its other name");
+     }
+-    let library = make(&[]).ok()?;
++    // Wine's vkd3d-proton requires a null pointer for an empty library.
++    // A zero-length Rust slice still supplies a non-null pointer.
++    let empty = || -> windows::core::Result<ID3D12PipelineLibrary1> {
++        use windows::core::Interface;
++        let mut library = std::ptr::null_mut();
++        // SAFETY: A null blob and zero length request an empty library. On
++        // success, the returned interface reference is owned by this caller.
++        unsafe {
++            (Interface::vtable(device).CreatePipelineLibrary)(
++                Interface::as_raw(device),
++                std::ptr::null(),
++                0,
++                &ID3D12PipelineLibrary::IID,
++                &mut library,
++            )
++            .ok()?;
++            ID3D12PipelineLibrary::from_raw(library).cast()
++        }
++    };
++    let library = match empty() {
++        Ok(library) => library,
++        Err(error) => {
++            tracing::warn!(%error, "could not create an empty host pipeline library");
++            return None;
++        }
++    };
+     Some(Library {
+         library,
+         _blob: Blob::None,
+@@ -723,7 +748,9 @@ fn used() -> std::sync::MutexGuard<'static, Option<HashSet<String>>> {
+ 
+ /// Whether the title pipeline with `key` was requested in this or an earlier run.
+ pub(crate) fn wanted_early(key: &str) -> bool {
+-    used().as_ref().is_some_and(|s| s.contains(key))
++    static ENABLED: OnceLock<bool> = OnceLock::new();
++    *ENABLED.get_or_init(|| std::env::var_os("VICTORY_LIBRARY_EARLY").is_none_or(|value| value != "0"))
++        && used().as_ref().is_some_and(|s| s.contains(key))
+ }
+ 
+ /// A draw or dispatch requested the title pipeline with `key`.

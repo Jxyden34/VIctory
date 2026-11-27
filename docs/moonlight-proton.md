@@ -48,6 +48,31 @@ To warm the translation cache, run `victory translate /path/to/shaders.rpf --war
 
 The frame interval is in milliseconds. `0` removes the limit, `16.667` requests 60 FPS and `33.333` requests 30 FPS. `VICTORY_LIBRARY_EARLY=1` re-enables anticipatory pipeline builds for comparison.
 
+## VItoriaBr on Proton
+
+VItoriaBr offers a lower internal display mode and graphics-buffer optimizations. Its author reported 4–6 FPS on the standard Windows RTX 5060 Ti preset and 22 FPS on a separate experimental build. [VItoriaBr status and tuning notes](https://github.com/uiliannn/VItoriaBr/tree/1361e190b7f46df996f00ea1b540ecf66785127f)
+
+To reproduce the Linux build, use the same toolchain and build command above. Use a separate VIctory cache because this checkout changes the shader translator.
+
+~~~bash
+git clone https://github.com/uiliannn/VItoriaBr.git vitoriabr-runtime
+cd vitoriabr-runtime
+git checkout 1361e190b7f46df996f00ea1b540ecf66785127f
+git apply --exclude=crates/victory-gpu/src/pipeline/library.rs \
+    /path/to/VIctory/contrib/moonlight/runtime.patch
+git apply /path/to/VIctory/contrib/moonlight/vitoriabr-pipeline-library.patch
+~~~
+
+The local test used the same GE-Proton and X11 display. It enabled these options before calling the launcher from a copy of the title profile.
+
+~~~bash
+export VICTORY_DISPLAY_MODE=1920x1080
+export VICTORY_TABLE_BUFFERS=1
+export VICTORY_INDIRECT_GATHER=1
+export VICTORY_CARD_BUFFERS_MB=1024
+export VICTORY_TEXTURE_BUDGET_MB=8192
+~~~
+
 ## Boot and stream results
 
 Measurements below use the host's frame counter. The video stream has its own frame rate.
@@ -64,7 +89,10 @@ Measurements below use the host's frame counter. The video stream has its own fr
 | GE-Proton with on-demand pipelines and texture worker | Reached the intro again with the shader cache and saved pipelines reused. |
 | Steam Deck on the permanent Sunshine endpoint | Connected over HEVC at 1280×800 and enumerated a virtual DualSense. GPU monitoring confirmed separate rendering and encoding cards. The port later reported a title-side null write after about eight minutes in the intro. |
 | Windows Moonlight 6.2.0 on the permanent endpoint, `93db653` | Paired, launched the same app, and streamed over HEVC. With the texture memory fallback enabled, parts of loading reached 55–90 FPS and the 3D intro became visible. The intro generally ran below 1 FPS with missing lighting and materials. After about 15 minutes the title hit breakpoint `0x80000003` and its crash report showed `INSTANCE_LIST` at 45,000/45,000. |
-| Windows Moonlight cold-cache restart, `52ac4ec` | The Moonlight app list relaunched the same tile after the runtime update. Sunshine connected over HEVC, the three frame hooks applied, and the host built and saved over 1,300 pipelines in the new cache. Parts of loading exceeded 60 FPS. The 3D intro still ran below 1 FPS in the measured window. |
+| Windows Moonlight cold-cache restart, `52ac4ec` | The Moonlight app list relaunched the same tile after the update. Sunshine connected over HEVC, the three frame hooks applied, and the host rebuilt its pipeline cache. Parts of loading exceeded 60 FPS. The intro still ran below 1 FPS. The title stopped after 17 minutes with the same breakpoint and `INSTANCE_LIST` at 45,000/45,000. |
+| Local VItoriaBr Proton run, `1361e190` | The title accepted a reported display mode of 1920×1080 and reached the 3D intro. The intro remained below 1 FPS. A concurrent workload occupied about 8.6 GB on the rendering GPU for much of this run. After it released that memory, the game still stopped at `0x80000003` with the same 45,000/45,000 instance pool. |
+
+For log intervals with at least 200 draws per frame, the median frame time was 3,551 ms on `93db653` (91 intervals) and 2,905 ms on `52ac4ec` (93 intervals). The shots and draw counts varied between runs. Copy preparation and read-back remained the largest measured costs.
 
 The newer Proton build cleared the observed shader compiler failure. The `93db653` stream reached rendered scenes, with copying and read-back still taking most of each frame. The later instance-pool failure matches the breakpoint and exhausted pool in another report. Playable frame rate, stable gameplay and a native Windows host run remain unverified. [VIctory issue #698](https://github.com/Marvisak/VIctory/issues/698)
 
