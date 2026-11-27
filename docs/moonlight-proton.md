@@ -73,6 +73,19 @@ export VICTORY_CARD_BUFFERS_MB=1024
 export VICTORY_TEXTURE_BUDGET_MB=8192
 ~~~
 
+### Instance pool capacity
+
+The Linux test reached the same pool exhaustion across both runtimes. The optional diagnostic patch gives three related pools more slots on the known retail build. It uses the title's normal allocator and checks the image before changing any call site. The patch adapts the sizing changes from the upstream diagnostic branch. [Pool exhaustion report](https://github.com/Marvisak/VIctory/issues/698) · [Source branch at the tested revision](https://github.com/lhnizdo/VIctory/tree/124fade01f50c4a2e587c760014479c8e474e0ba)
+
+Apply the patch after the two VItoriaBr compatibility patches, rebuild with diagnostics, and set `VICTORY_POOL_SCALE=2` for a test with a separate profile.
+
+~~~bash
+git apply /path/to/VIctory/contrib/moonlight/vitoriabr-pool-scale.patch
+export VICTORY_POOL_SCALE=2
+~~~
+
+The first boot with this setting applied 632 call-site changes. At initialization, the three affected allocations requested 45,000 slots instead of 22,500, 100,000 instead of 50,000, and 131,056 instead of 98,000. The last allocation reached the cap for 17-bit slot indices.
+
 ## Boot and stream results
 
 Measurements below use the host's frame counter. The video stream has its own frame rate.
