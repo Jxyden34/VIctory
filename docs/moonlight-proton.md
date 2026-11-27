@@ -118,7 +118,11 @@ git apply /path/to/VIctory/contrib/moonlight/nvidia-lighting.patch
 export VICTORY_BVH_BUILDER=1 VICTORY_WATER_LIGHT=1
 ~~~
 
-The follow-up release build compiled for the Proton target. Rendering and stability with the changes remain to be verified in a streamed run.
+The follow-up release build compiled for the Proton target. Proton tests passed for upload-space reservation, placed descriptor identity, unused view words and the 3D texture alias. The private 1080p boot activated all 53 ray-tracing structure-builder pipelines. It continued rendering for 3 minutes 41 seconds until stopped to compare render sizes. The earlier watchdog was absent in that run. A streamed visual comparison is pending.
+
+### DLSS on the RTX 3060
+
+The `upscaler-check --device` command completed three DLSS Super Resolution evaluations under GE-Proton on the rendering GPU using the signed NVIDIA Streamline 2.14.16 package. The SDK is supplied separately. The DLSS Quality game boot selected a 1706×960 internal scene at 2560×1440 SDR output, and the runtime logged DLSS replacing the game's FidelityFX dispatch. The test uses the existing instance-pool and Proton fixes, with ray tracing and frame generation off. [NVIDIA Streamline 2.14.16](https://github.com/NVIDIA-RTX/Streamline/releases/tag/v2.14.16)
 
 ### Launchers
 
@@ -148,6 +152,9 @@ Measurements below use the host's frame counter. The video stream has its own fr
 | Combined build with VItoriaBr texture changes | Reused a copy of the previous run's shader and pipeline cache and reached the 3D intro. The median at the first checkpoint was 2.0 FPS over 22 intervals with at least 1,000 draws per frame. The warm cache and scene timing can both affect this comparison. |
 | Windows laptop and Steam Deck streaming the combined build | Both clients connected to the same Sunshine display over HEVC at 1280×800. Sunshine created a virtual DualSense for the Deck, and the tester confirmed that the Deck accepted input. The rendering card was near its 12 GB VRAM limit, the second card encoded both streams, and recent 3D intervals were around 2–3 FPS. The user reported poor image quality. During those intervals the renderer intentionally skipped about 624 indirect operations per frame for ray tracing with the structure builder disabled. |
 | Windows laptop ray-tracing test through the Moonlight tile | Connected over HEVC with ray tracing and the water-light pass enabled. Presentation stopped during the first 3D load. About 35 seconds after the last frame report, the title logged `0xc0000005` at `+0x23cf683`. The previous launcher was restored for new starts. |
+| NVIDIA upload-memory fix, 1080p with ray tracing | Passed the earlier watchdog point and continued drawing until a deliberate stop after 3 minutes 41 seconds. Median was 0.8 FPS across 23 intervals with at least 1,000 draws per frame. |
+| NVIDIA upload-memory fix, 720p with FidelityFX | The title accepted a 1280×720 internal scene and 2560×1440 output. It then reported integer divide-by-zero `0xc0000094` at `+0x28f03e8` before sustained 3D rendering. |
+| NVIDIA fork DLSS Quality with selected copy settings | The runtime took over the game's upscaling. Early 3D scenes ran in the low single digits. The test recorded thousands of queries about unmapped or reserved memory per frame. |
 
 The combined host run passed the earlier instance-pool breakpoint time. After ten minutes of the test, the existing experimental Sunshine entry was pointed at the combined build for the next new launch. The ongoing clients were watching the private test on the same capture display.
 
