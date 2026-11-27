@@ -106,6 +106,20 @@ export VICTORY_CARD_BUFFERS_MB=1024 VICTORY_TEXTURE_BUDGET_MB=8192
 
 The title reported a 1920×1080 internal scene and 2560×1440 SDR output. The Sunshine capture display continued to run at 1280×800. The 16 `victory-core` tests passed. A focused `victory-gpu` test under Proton checked that a placed 3D unordered view uses a host texture and that a shader view reads the alias. The port still dropped draws and ran at single-digit frame rates in the intro.
 
+### NVIDIA lighting follow-up
+
+The first ray-tracing launch from the existing Moonlight tile stopped presenting during the first 3D load and then reported a null write at `+0x23cf683`. VIctory-NVIDIA identifies that exact location as the title's 30-second watchdog and traces its own reproduction to repeated searches for upload address space. The [follow-up patch](../contrib/moonlight/nvidia-lighting.patch) brings over the reservation and retry changes, along with a placed-view fix for unstable descriptor keys. [Watchdog and arena fix](https://github.com/trustno1-coder/VIctory-NVIDIA/pull/88) · [Early upload reservation](https://github.com/trustno1-coder/VIctory-NVIDIA/commit/e69e39c55b92f71a40ea3eadaa3439678df4e721) · [Placed-view fix](https://github.com/trustno1-coder/VIctory-NVIDIA/pull/58)
+
+Apply the follow-up after `combined-runtime.patch` and rebuild with the same command. The trial uses its own profile and cache. To reproduce the ray-tracing path, set both switches before launching.
+
+~~~bash
+git apply --check /path/to/VIctory/contrib/moonlight/nvidia-lighting.patch
+git apply /path/to/VIctory/contrib/moonlight/nvidia-lighting.patch
+export VICTORY_BVH_BUILDER=1 VICTORY_WATER_LIGHT=1
+~~~
+
+The follow-up release build compiled for the Proton target. Rendering and stability with the changes remain to be verified in a streamed run.
+
 ### Launchers
 
 [VILauncher](https://github.com/dazacode/vilauncher) builds and launches selected projects on Windows. [SixLauncher](https://github.com/SixLauncher/launcher) also supports Proton on Linux and accepts a locally built runtime. On the test host, its `v0.1.139` release generated a dry-run command for the combined executable and existing GE-Proton11-14. The boot results below use the UMU launcher with the rendering GPU selected explicitly.
@@ -133,6 +147,7 @@ Measurements below use the host's frame counter. The video stream has its own fr
 | Newer NVIDIA base with the Proton and pool changes | Booted from a fresh runtime cache and reached the 3D intro. The run was stopped after about four minutes to test the VItoriaBr texture changes. The median was 1.6 FPS over 26 intervals with at least 1,000 draws per frame. |
 | Combined build with VItoriaBr texture changes | Reused a copy of the previous run's shader and pipeline cache and reached the 3D intro. The median at the first checkpoint was 2.0 FPS over 22 intervals with at least 1,000 draws per frame. The warm cache and scene timing can both affect this comparison. |
 | Windows laptop and Steam Deck streaming the combined build | Both clients connected to the same Sunshine display over HEVC at 1280×800. Sunshine created a virtual DualSense for the Deck, and the tester confirmed that the Deck accepted input. The rendering card was near its 12 GB VRAM limit, the second card encoded both streams, and recent 3D intervals were around 2–3 FPS. The user reported poor image quality. During those intervals the renderer intentionally skipped about 624 indirect operations per frame for ray tracing with the structure builder disabled. |
+| Windows laptop ray-tracing test through the Moonlight tile | Connected over HEVC with ray tracing and the water-light pass enabled. Presentation stopped during the first 3D load. About 35 seconds after the last frame report, the title logged `0xc0000005` at `+0x23cf683`. The previous launcher was restored for new starts. |
 
 The combined host run passed the earlier instance-pool breakpoint time. After ten minutes of the test, the existing experimental Sunshine entry was pointed at the combined build for the next new launch. The ongoing clients were watching the private test on the same capture display.
 

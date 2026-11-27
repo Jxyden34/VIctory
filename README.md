@@ -8,7 +8,16 @@ the platform underneath it and converts the title's data, ahead of time where
 it can (shaders and pipelines too, see Getting started) and on first use
 otherwise. See [docs/architecture.md](docs/architecture.md).
 
-## Status (2026-11-25)
+## Sunshine and Moonlight status (2026-11-27)
+
+This branch documents a Linux host running VIctory under GE-Proton11-14. A Windows laptop and Steam Deck both streamed the 3D intro over HEVC at 1280×800. The Steam Deck controller connected as a virtual DualSense and accepted input. One RTX 3060 rendered the game and a second encoded the streams.
+
+- The combined VIctory-NVIDIA and VItoriaBr build reached roughly 2–3 FPS in recent intro scenes and passed the previous instance-pool crash point. Lighting and materials are still incomplete, and playable performance remains unverified.
+- Enabling ray tracing on that build stalled the first 3D load and triggered the game's watchdog. The latest test build includes the upstream changes to reserve upload address space, limit failed allocation searches and fix placed-view descriptors. It has compiled and is awaiting a stream test. [NVIDIA watchdog fix](https://github.com/trustno1-coder/VIctory-NVIDIA/pull/88) · [NVIDIA texture fix](https://github.com/trustno1-coder/VIctory-NVIDIA/pull/58)
+
+[Build steps and boot log](docs/moonlight-proton.md) · [Combined runtime patch](contrib/moonlight/combined-runtime.patch) · [NVIDIA lighting patch](contrib/moonlight/nvidia-lighting.patch)
+
+## Upstream Windows status (2026-11-25)
 
 **Not playable yet, because of the framerate: about 1 frame per second in the
 world.** Nothing else keeps the game from working: the title boots, runs its

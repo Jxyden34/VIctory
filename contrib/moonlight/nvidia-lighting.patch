@@ -1,0 +1,660 @@
+diff --git a/apps/victory/src/main.rs b/apps/victory/src/main.rs
+index b55ba1120fb58979496166bc10c3b08208506c8b..3be330b9c0ff6eefa5756737d7093f0bd95b4bb2 100644
+--- a/apps/victory/src/main.rs
++++ b/apps/victory/src/main.rs
+@@ -198,6 +198,9 @@ enum Console {
+ }
+ 
+ fn main() -> Result<()> {
++    // Reserve upload address space before the game's allocations fill the window.
++    #[cfg(windows)]
++    victory_hle::reserve_upload_space();
+     // The audio recorder `run` starts for `VICTORY_AUDIO_CAPTURE`.
+     #[cfg(all(windows, feature = "diagnostics"))]
+     if std::env::var_os("VICTORY_AUDIO_CAPTURE").is_some() {
+diff --git a/crates/victory-gpu/src/descriptor.rs b/crates/victory-gpu/src/descriptor.rs
+index fb010e58345dc62e68261105f4dd1efa640b0c3a..aa7a9d5b2e89f3f820f8b68c7110b30d3c1b39f7 100644
+--- a/crates/victory-gpu/src/descriptor.rs
++++ b/crates/victory-gpu/src/descriptor.rs
+@@ -1090,6 +1090,11 @@ struct Views {
+     /// The shapes of views of placed memory, and where each is.
+     shapes: Vec<Shape>,
+     shape_index: std::collections::BTreeMap<Shape, u32>,
++    /// Entries of views that no resource releases (constant buffer views
++    /// and views of placed memory that did not fit a record), oldest first,
++    /// with the generation each was made at: past [`ownerless_cap`] the
++    /// oldest is freed, so they cannot grow for the whole run.
++    ownerless: std::collections::VecDeque<(u32, u32)>,
+ }
+ 
+ /// Read far more often than written: every slot a draw reads through a
+@@ -1103,7 +1108,27 @@ static VIEWS: std::sync::RwLock<Views> = std::sync::RwLock::new(Views {
+     free: Vec::new(),
+     shapes: Vec::new(),
+     shape_index: std::collections::BTreeMap::new(),
++    ownerless: std::collections::VecDeque::new(),
+ });
++
++/// How many table entries of views without a resource are kept
++/// ([`Views::ownerless`]). Once the shapes of placed views are full (the
++/// title makes far more of them than it has kinds of textures: 4,194,304
++/// after half an hour of play), every placed view it writes becomes such an
++/// entry, some 15,000 a second: kept for the run they took 16.7 GB after 70
++/// minutes and the frame rate fell by half. A descriptor names the view it
++/// was written with for a frame or a few, so the oldest of a million are
++/// long out of use; one naming a freed entry reads as stale (no view).
++/// `VICTORY_OWNERLESS_VIEWS=<n>` keeps `n` (0: all, as before).
++fn ownerless_cap() -> usize {
++    static CAP: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
++    *CAP.get_or_init(|| {
++        std::env::var("VICTORY_OWNERLESS_VIEWS")
++            .ok()
++            .and_then(|v| v.trim().parse().ok())
++            .unwrap_or(1 << 20)
++    })
++}
+ const VIEW_TAG: u32 = u32::from_le_bytes(*b"vVIE");
+ 
+ /// A record is the tag and two words, `i` and `generation` (the host keeps
+@@ -1232,6 +1257,40 @@ impl Views {
+     /// The record words of `view` as a table entry: its entry (a new or a
+     /// freed one if the view is not there yet) and that entry's generation.
+     fn entry(&mut self, view: View) -> [u32; 2] {
++        self.entry_kept(view, ownerless_cap())
++    }
++
++    /// [`entry`](Self::entry), keeping at most `cap` entries of views
++    /// without a resource (0: all).
++    fn entry_kept(&mut self, view: View, cap: usize) -> [u32; 2] {
++        let ownerless = view.resources() == [0, 0] && matches!(view, View::Constant(..) | View::Placed(..));
++        let fresh = !self.index.contains_key(&view);
++        let words = self.entry_made(view);
++        if ownerless && fresh {
++            self.ownerless.push_back((words[0], words[1]));
++            while cap != 0 && self.ownerless.len() > cap {
++                let (i, generation) = self.ownerless.pop_front().expect("longer than cap");
++                self.free_ownerless(i, generation);
++            }
++        }
++        words
++    }
++
++    /// Frees entry `i` if it still holds the view it had at `generation`
++    /// (it may have been freed and made again for another view since).
++    fn free_ownerless(&mut self, i: u32, generation: u32) {
++        let Some((view, current)) = self.list.get(i as usize).cloned() else {
++            return;
++        };
++        if current != generation || self.index.get(&view) != Some(&i) {
++            return;
++        }
++        self.index.remove(&view);
++        self.list[i as usize].1 = ((generation + 1) & GENERATIONS).max(1);
++        self.free.push(i);
++    }
++
++    fn entry_made(&mut self, view: View) -> [u32; 2] {
+         let i = match self.index.get(&view) {
+             Some(&i) => i,
+             None => {
+@@ -1579,6 +1638,56 @@ pub(crate) extern "system" fn create_uav(
+     record(handle, view);
+ }
+ 
++/// Copy only the fields of a placed resource description. Padding can differ
++/// between two views of the same texture and the caller may leave it unwritten.
++fn placed_resource_words(desc: *const [u32; 14]) -> Option<[u32; 14]> {
++    if desc.is_null() {
++        return None;
++    }
++    let src = desc.cast::<u32>();
++    let mut fields = [0; 14];
++    // SAFETY: the caller supplies a 56-byte ResourceDesc, possibly unaligned.
++    // Dimension occupies word 0. Alignment through Flags occupy words 2..13.
++    unsafe {
++        fields[0] = src.read_unaligned();
++        fields[2..13].copy_from_slice(&src.add(2).cast::<[u32; 11]>().read_unaligned());
++    }
++    Some(fields)
++}
++
++/// The words of a placed view's description with those its kind does not
++/// use set to zero. The first ten words are the PC's view description: for a
++/// shader resource view, the format, the dimension, the component mapping,
++/// a word of padding (the union that follows starts on 8 bytes) and the
++/// union's six words; for an unordered access view, the format, the
++/// dimension and the union's eight words. Each dimension uses only the head
++/// of the union, and the title leaves the rest unwritten: run vt-shapes saw
++/// 131,392 values in word 3 and 36,413 in word 9 of a million shapes, each
++/// a new shape for the same view. Words 10 and on (the address and the
++/// console's own fields) are kept; an unknown dimension keeps all.
++fn placed_view_words(desc: *const [u32; 16], unordered: bool) -> Option<[u32; 16]> {
++    let mut d = words(desc)?;
++    // Words of the union each dimension uses (D3D12_BUFFER_SRV and the like).
++    let (start, used) = if unordered {
++        // D3D12_UAV_DIMENSION: buffer, 1D, 1D array, 2D, 2D array, 2D MS,
++        // 2D MS array, 3D.
++        const USED: [usize; 9] = [0, 7, 1, 3, 2, 4, 0, 2, 3];
++        (2, USED.get(d[1] as usize).copied())
++    } else {
++        // D3D12_SRV_DIMENSION: buffer, 1D, 1D array, 2D, 2D array, 2D MS,
++        // 2D MS array, 3D, cube, cube array, acceleration structure.
++        const USED: [usize; 12] = [0, 5, 3, 5, 4, 6, 0, 2, 3, 3, 5, 2];
++        (4, USED.get(d[1] as usize).copied())
++    };
++    if let Some(used) = used.filter(|_| d[1] != 0) {
++        if !unordered {
++            d[3] = 0;
++        }
++        d[start + used..10].fill(0);
++    }
++    Some(d)
++}
++
+ /// Device methods 0x230 and 0x238: shader resource and unordered access
+ /// views of memory the title placed itself, `(resource desc, view desc,
+ /// handle)`.
+@@ -1588,7 +1697,7 @@ pub(crate) extern "system" fn create_placed_srv(
+     desc: *const [u32; 16],
+     handle: u64,
+ ) {
+-    if let (Some(resource), Some(desc)) = (words(resource), words(desc)) {
++    if let (Some(resource), Some(desc)) = (placed_resource_words(resource), placed_view_words(desc, false)) {
+         record(handle, View::Placed(false, resource, desc));
+     }
+ }
+@@ -1599,7 +1708,7 @@ pub(crate) extern "system" fn create_placed_uav(
+     desc: *const [u32; 16],
+     handle: u64,
+ ) {
+-    if let (Some(resource), Some(desc)) = (words(resource), words(desc)) {
++    if let (Some(resource), Some(desc)) = (placed_resource_words(resource), placed_view_words(desc, true)) {
+         record(handle, View::Placed(true, resource, desc));
+     }
+ }
+@@ -1924,6 +2033,76 @@ mod tests {
+         unsafe { VirtualFree(memory, 0, MEM_RELEASE) };
+     }
+ 
++    /// Two placed views alike but for the words their kind does not use
++    /// (the padding after the component mapping, the union's unused tail)
++    /// are one record; a used word still tells them apart.
++    #[test]
++    fn placed_views_ignore_unused_view_words() {
++        let mut slot = [0u32; 8];
++        let handle = slot.as_mut_ptr() as u64;
++        let null = std::ptr::null();
++        let resource = [1, 0, 0, 0, 0x4000, 0, 1, 0x10001, 0, 1, 0, 1, 0, 0];
++        // A structured buffer view: words 4-5 first element, 6 count, 7
++        // stride, 8 flags; 3 and 9 are not used.
++        let srv = [0, 1, 0x1688, 0, 16, 0, 64, 16, 0, 0, 0x1000, 0x6, 0, 0, 0, 0];
++        // An unordered buffer view: words 2-3 first element, 4 count, 5
++        // stride, 6-7 counter offset, 8 flags; 9 is not used.
++        let uav = [0, 1, 16, 0, 64, 16, 0, 0, 0, 0, 0x1000, 0x6, 0, 0, 0, 0];
++        for (unordered, create, desc, unused, used) in [
++            (false, create_placed_srv as extern "system" fn(_, _, _, _), srv, [3usize, 9], 6usize),
++            (true, create_placed_uav, uav, [9, 9], 4),
++        ] {
++            create(null, &resource, &desc, handle);
++            let first = slot;
++            assert_eq!(view(handle), Some(View::Placed(unordered, resource, desc)));
++            let mut noisy = desc;
++            for w in unused {
++                noisy[w] = 0xdead_beef;
++            }
++            create(null, &resource, &noisy, handle);
++            assert_eq!(slot, first, "unused words left out");
++            let mut other = desc;
++            other[used] += 1;
++            create(null, &resource, &other, handle);
++            assert_ne!(slot, first, "a used word counts");
++        }
++        // A 2D texture view uses four words of the union (4-7): 8 and 9 go.
++        let mut tex = [28, 4, 0x1688, 0x77, 0, 1, 0, 0, 0x55, 0x66, 0x2000, 0x6, 0, 0, 0, 0];
++        create_placed_srv(null, &resource, &tex, handle);
++        tex[3] = 0;
++        (tex[8], tex[9]) = (0, 0);
++        assert_eq!(view(handle), Some(View::Placed(false, resource, tex)));
++    }
++
++    #[test]
++    fn placed_views_share_resources_across_description_padding() {
++        let mut slot = [0u32; 8];
++        let handle = slot.as_mut_ptr() as u64;
++        let view_desc = [0u32; 16];
++        let null = std::ptr::null();
++        let mut resource = [3, 0, 0, 0, 8, 0, 8, 0x10001, 28, 1, 0, 0, 0, 0];
++        let expected = resource;
++        for (unordered, create) in [
++            (false, create_placed_srv as extern "system" fn(_, _, _, _)),
++            (true, create_placed_uav),
++        ] {
++            create(null, &expected, &view_desc, handle);
++            let first = slot;
++            resource[1] = 0xaaaa_aaaa;
++            resource[13] = 0xbbbb_bbbb;
++            create(null, &resource, &view_desc, handle);
++            assert_eq!(slot, first);
++            assert_eq!(
++                view(handle),
++                Some(View::Placed(unordered, expected, view_desc))
++            );
++            let mut other = resource;
++            other[12] = 4;
++            create(null, &other, &view_desc, handle);
++            assert_ne!(slot, first);
++        }
++    }
++
+     #[test]
+     fn views_survive_copies() {
+         let null = std::ptr::null();
+@@ -1980,6 +2159,50 @@ mod tests {
+         assert_ne!(constant_words(0x1000, 1 << 14), constant_words(0x1000, 64));
+     }
+ 
++    /// Entries of views no resource releases stay under their cap: the
++    /// oldest go stale, the newest still name their views, entries are
++    /// reused rather than added, and views of resources are never dropped.
++    #[test]
++    fn ownerless_entries_are_capped() {
++        let mut views = Views {
++            list: Vec::new(),
++            index: std::collections::BTreeMap::new(),
++            by_resource: std::collections::BTreeMap::new(),
++            free: Vec::new(),
++            shapes: Vec::new(),
++            shape_index: std::collections::BTreeMap::new(),
++            ownerless: std::collections::VecDeque::new(),
++        };
++        let placed = |n: u32| View::Placed(false, [n; 14], [n; 16]);
++        let named = |views: &Views, words: [u32; 2], view: &View| {
++            views.list.get(words[0] as usize).is_some_and(|(v, g)| *g == words[1] && v == view)
++        };
++        let words: Vec<[u32; 2]> = (0..10).map(|n| views.entry_kept(placed(n), 4)).collect();
++        assert_eq!(views.index.len(), 4, "four kept");
++        assert!(views.list.len() <= 5, "entries reused, not added: {}", views.list.len());
++        for n in 0..6 {
++            assert!(!named(&views, words[n], &placed(n as u32)), "entry {n} stale");
++        }
++        for n in 6..10 {
++            assert!(named(&views, words[n], &placed(n as u32)), "entry {n} kept");
++        }
++        // The same view written again keeps its words.
++        assert_eq!(views.entry_kept(placed(9), 4), words[9]);
++        // A view of a resource is freed with the resource only.
++        let shader = View::Shader(0x1234, None);
++        let kept = views.entry_kept(shader.clone(), 4);
++        for n in 10..40 {
++            views.entry_kept(placed(n), 4);
++        }
++        assert!(named(&views, kept, &shader));
++        assert!(views.list.len() <= 6);
++        // 0 keeps them all.
++        for n in 40..60 {
++            views.entry_kept(placed(n), 0);
++        }
++        assert_eq!(views.index.len(), 1 + 4 + 20);
++    }
++
+     /// The leak of run 65: a title that writes constant buffer views and
+     /// views of placed memory at ever new addresses adds nothing to the
+     /// table; one shape stands for all the placed views alike.
+@@ -1991,8 +2214,9 @@ mod tests {
+         let null = std::ptr::null();
+         let slots = [0u64; 4];
+         let at = slots.as_ptr() as u64;
+-        // A resource description and a view no other test uses.
+-        let resource: [u32; 14] = std::array::from_fn(|k| 0x5ee0_0000 + k as u32);
++        // A resource description and a view no other test uses; words 1 and
++        // 13 are the description's padding, which placed views keep as zero.
++        let resource: [u32; 14] = std::array::from_fn(|k| if k == 1 || k == 13 { 0 } else { 0x5ee0_0000 + k as u32 });
+         let mut desc: [u32; 16] = std::array::from_fn(|k| 0x7a70_0000 + k as u32);
+         let mine = |v: &View| match v {
+             View::Constant(address, _) => (0x6_0000_0000..0x6_1000_0000).contains(address),
+diff --git a/crates/victory-gpu/src/host.rs b/crates/victory-gpu/src/host.rs
+index e0cc6756d94d4c9c78a6b1903604dd658ad41a08..fc36f91d640b2b915bb3dec83f31b0de3fbd6547 100644
+--- a/crates/victory-gpu/src/host.rs
++++ b/crates/victory-gpu/src/host.rs
+@@ -984,6 +984,7 @@ fn create() -> windows::core::Result<Host> {
+             .and_then(|factory| factory.EnumAdapterByLuid::<IDXGIAdapter3>(device.GetAdapterLuid()))
+             .ok();
+         tracing::info!("host D3D12 device ready");
++        crate::upload::reserve_early();
+         Ok(Host {
+             device,
+             queue,
+diff --git a/crates/victory-gpu/src/lib.rs b/crates/victory-gpu/src/lib.rs
+index f1cc6bede5c07d2db530dca4923eb0a35b64e50e..a16fcf1b70a6359a192e5a2183cbd8908584f8f9 100644
+--- a/crates/victory-gpu/src/lib.rs
++++ b/crates/victory-gpu/src/lib.rs
+@@ -107,6 +107,10 @@ mod texback;
+ 
+ #[cfg(windows)]
+ pub use host::on_failure;
++/// Reserves the address space for memory shaders read by address; call it
++/// first thing, before the process's other allocations can fill [4 GiB, 2^37).
++#[cfg(windows)]
++pub use upload::reserve_space as reserve_upload_space;
+ 
+ /// Whether `switch` is on now, if it is one of those `VICTORY_AB` turns on and
+ /// off while the title runs (`ab`).
+diff --git a/crates/victory-gpu/src/memory.rs b/crates/victory-gpu/src/memory.rs
+index 169c3ce38442529fcb273faddfbf14cb9aae7f4b..949c02dac6591cd3f507450e6809dfe523d1eb26 100644
+--- a/crates/victory-gpu/src/memory.rs
++++ b/crates/victory-gpu/src/memory.rs
+@@ -580,11 +580,46 @@ impl Memory {
+     }
+ 
+     /// Another arena's pages.
++    ///
++    /// After one that could not be made, no other is tried before
++    /// the next frame. `ready` asks for one at every dispatch of the builder
++    /// while the spares are low (thousands a frame); once the reservation
++    /// failed every ask searched the address range again under this lock,
++    /// and frames took 30 s until the title's watchdog ended the run (RTX
++    /// 4090, 11-27: 19 arenas for minutes, the recording threads 70 % in
++    /// the kernel under `upload::reserve`). A reservation whose copy could
++    /// not be made is given back, not left behind.
+     fn another(&mut self) -> bool {
++        use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
++        static FAILED: AtomicU64 = AtomicU64::new(u64::MAX);
++        static WHY: [AtomicU64; 2] = [const { AtomicU64::new(0) }; 2];
++        let frame = crate::frame::current();
++        if FAILED.load(Relaxed) == frame {
++            return false;
++        }
++        let arenas = self.arenas.len();
++        let failed = |why: usize| {
++            FAILED.store(frame, Relaxed);
++            let n = WHY[why].fetch_add(1, Relaxed) + 1;
++            if n.is_power_of_two() {
++                tracing::warn!(
++                    arenas,
++                    times = n,
++                    "title memory by address: no other arena ({}); none tried again this frame",
++                    ["the address range has no room for one", "its copy could not be made"][why]
++                );
++            }
++        };
+         let Some(at) = crate::upload::reserve(ARENA as usize) else {
++            failed(0);
+             return false;
+         };
+         let Some(n) = crate::shadow::by_address(at as u64, ARENA).and_then(|s| self.number(s)) else {
++            failed(1);
++            // SAFETY: the reservation just made, which nothing else knows of.
++            unsafe {
++                windows_sys::Win32::System::Memory::VirtualFree(at as *mut _, 0, windows_sys::Win32::System::Memory::MEM_RELEASE)
++            };
+             return false;
+         };
+         self.arenas.push((n, at));
+diff --git a/crates/victory-gpu/src/resource.rs b/crates/victory-gpu/src/resource.rs
+index e4019de3f04a23263da257741195eb1423d26f57..ef87d7556bb17910dd611bd62c9e85abedfb7cbd 100644
+--- a/crates/victory-gpu/src/resource.rs
++++ b/crates/victory-gpu/src/resource.rs
+@@ -121,6 +121,9 @@ pub(crate) struct AllocationInfo {
+ 
+ const _: () = assert!(size_of::<HeapProperties>() == 20);
+ const _: () = assert!(size_of::<HeapDesc>() == 48);
++// placed_resource_words copies the two field spans on either side of the padding.
++const _: () = assert!(std::mem::offset_of!(ResourceDesc, alignment) == 8);
++const _: () = assert!(std::mem::offset_of!(ResourceDesc, flags) == 48);
+ const _: () = assert!(size_of::<ResourceDesc>() == 56);
+ 
+ const BUFFER: u32 = 1;
+diff --git a/crates/victory-gpu/src/upload.rs b/crates/victory-gpu/src/upload.rs
+index d6f60e55a9ca901c23a9f6401eb580d85677c8ff..8b54cee80fa577612e1fe13fa07bc09ce8ea81cc 100644
+--- a/crates/victory-gpu/src/upload.rs
++++ b/crates/victory-gpu/src/upload.rs
+@@ -54,15 +54,15 @@ fn gap(taken: &[bool], n: usize) -> Option<usize> {
+     None
+ }
+ 
+-/// Fresh zeroed memory in [4 GiB, 2^37) (where the directory of memory by
+-/// address reaches, `MEMORY_PAGES`), write-watched as the title's own
+-/// pools are (copies then take only written pages).
+-pub(crate) fn reserve(len: usize) -> Option<usize> {
++const MEM_WRITE_WATCH: u32 = 0x20_0000;
++const MEM_TOP_DOWN: u32 = 0x10_0000;
++
++/// `VirtualAlloc2` in [4 GiB, 2^37): its address, or the error.
++fn allocate_in_window(len: usize, kind: u32) -> Result<usize, u32> {
++    use windows_sys::Win32::Foundation::GetLastError;
+     use windows_sys::Win32::System::Memory::{
+-        MEM_ADDRESS_REQUIREMENTS, MEM_COMMIT, MEM_EXTENDED_PARAMETER, MEM_RESERVE, MemExtendedParameterAddressRequirements,
+-        PAGE_READWRITE, VirtualAlloc2,
++        MEM_ADDRESS_REQUIREMENTS, MEM_EXTENDED_PARAMETER, MemExtendedParameterAddressRequirements, PAGE_READWRITE, VirtualAlloc2,
+     };
+-    const MEM_WRITE_WATCH: u32 = 0x20_0000;
+     let mut requirements = MEM_ADDRESS_REQUIREMENTS {
+         LowestStartingAddress: (1usize << 32) as *mut _,
+         HighestEndingAddress: ((1usize << 37) - 1) as *mut _,
+@@ -73,18 +73,160 @@ pub(crate) fn reserve(len: usize) -> Option<usize> {
+     parameter.Anonymous2.Pointer = (&raw mut requirements).cast();
+     // SAFETY: a fresh allocation; the parameter points at `requirements`,
+     // which outlives the call.
+-    let at = unsafe {
+-        VirtualAlloc2(
+-            std::ptr::null_mut(),
+-            std::ptr::null(),
+-            len,
+-            MEM_RESERVE | MEM_COMMIT | MEM_WRITE_WATCH,
+-            PAGE_READWRITE,
+-            &mut parameter,
+-            1,
+-        )
+-    } as usize;
+-    (at != 0).then_some(at)
++    let at = unsafe { VirtualAlloc2(std::ptr::null_mut(), std::ptr::null(), len, kind, PAGE_READWRITE, &mut parameter, 1) }
++        as usize;
++    if at == 0 {
++        // SAFETY: plain call.
++        Err(unsafe { GetLastError() })
++    } else {
++        Ok(at)
++    }
++}
++
++/// Pieces of address space in [4 GiB, 2^37), [`EARLY_PIECE`] each, reserved
++/// at the start (`VICTORY_LOW_EARLY_MB`, 3,200 with the structure
++/// builder, else 0). [`reserve`] commits a whole one for a request of that
++/// size (an arena of memory by address) before it looks for room.
++///
++/// By the time the builder runs, the title's mappings and ours fill that
++/// range: no 64 MiB gap was left after 19 of the builder's arenas (RTX 4090,
++/// 11-27), and the pages it could not hold read zeros (broken reflections,
++/// flicker). Reserved before the title spreads, the range costs no memory
++/// until a piece is committed. Each piece is a reservation of its own: as
++/// one reservation of 3.2 GB the submissions' write-watch askings ran
++/// across the arenas in single long walks, 2 ms a frame more.
++static EARLY: Mutex<Vec<usize>> = Mutex::new(Vec::new());
++/// The size of an [`EARLY`] piece: `memory.rs`'s `ARENA`.
++const EARLY_PIECE: usize = 64 << 20;
++
++/// Reserves [`EARLY`]; once, as early as the host is made.
++pub(crate) fn reserve_early() {
++    use windows_sys::Win32::System::Memory::MEM_RESERVE;
++    static ONCE: std::sync::Once = std::sync::Once::new();
++    ONCE.call_once(|| {
++        let builder = std::env::var_os("VICTORY_BVH_BUILDER").is_some_and(|v| v == "1");
++        let mb = std::env::var("VICTORY_LOW_EARLY_MB")
++            .ok()
++            .and_then(|v| v.trim().parse::<usize>().ok())
++            .unwrap_or(if builder { 3200 } else { 0 });
++        let mut early = EARLY.lock().unwrap_or_else(|e| e.into_inner());
++        for _ in 0..(mb << 20) / EARLY_PIECE {
++            let Ok(at) = allocate_in_window(EARLY_PIECE, MEM_RESERVE | MEM_WRITE_WATCH) else {
++                break;
++            };
++            early.push(at);
++        }
++        // The lowest first.
++        early.sort_unstable_by(|a, b| b.cmp(a));
++        if mb > 0 {
++            tracing::info!(mb, pieces = early.len(), "low memory reserved early (VICTORY_LOW_EARLY_MB)");
++        }
++    });
++}
++
++/// A whole [`EARLY`] piece, committed, for a request of its size.
++fn from_early(len: usize) -> Option<usize> {
++    use windows_sys::Win32::System::Memory::{MEM_COMMIT, PAGE_READWRITE, VirtualAlloc};
++    if len != EARLY_PIECE {
++        return None;
++    }
++    let at = EARLY.lock().unwrap_or_else(|e| e.into_inner()).pop()?;
++    // SAFETY: a reservation of our own, not committed before.
++    let done = unsafe { VirtualAlloc(at as *const _, len, MEM_COMMIT, PAGE_READWRITE) } as usize;
++    (done == at).then_some(at)
++}
++
++/// The address space every run reserves first thing ([`reserve_space`]),
++/// at the top of [4 GiB, 2^37): [`POOL_PIECES`] reservations of
++/// [`EARLY_PIECE`] (one each, for the write-watch walks as above), before
++/// anything else can fill that window. On players' PCs it was full by the
++/// first ray-traced frame (the title's 2 GiB pool went above 2^37 there):
++/// the first upload asked for failed, and the title threw "D3D12 XDXR
++/// Error: Failed to allocate upload buffer" and ended the game (RTX 4090,
++/// 5080, 5090, 11-27).
++const POOL_PIECES: usize = 32;
++
++/// Per piece of the pool: its start and how much of it is handed out.
++static POOL: Mutex<Vec<(usize, usize)>> = Mutex::new(Vec::new());
++
++/// Reserves the pool (address space only, nothing committed). Called first
++/// thing in `main`; [`reserve`] does it otherwise.
++pub fn reserve_space() {
++    use windows_sys::Win32::System::Memory::MEM_RESERVE;
++    static ONCE: std::sync::Once = std::sync::Once::new();
++    ONCE.call_once(|| {
++        let mut pool = POOL.lock().unwrap_or_else(|e| e.into_inner());
++        for _ in 0..POOL_PIECES {
++            let Ok(at) = allocate_in_window(EARLY_PIECE, MEM_RESERVE | MEM_WRITE_WATCH | MEM_TOP_DOWN) else {
++                break;
++            };
++            pool.push((at, 0));
++        }
++    });
++}
++
++/// `len` bytes of the pool committed, from the first piece with room.
++fn from_pool(len: usize) -> Option<usize> {
++    use windows_sys::Win32::System::Memory::{MEM_COMMIT, PAGE_READWRITE, VirtualAlloc};
++    static TOLD: std::sync::Once = std::sync::Once::new();
++    let len = len.div_ceil(BLOCK) * BLOCK;
++    let mut pool = POOL.lock().unwrap_or_else(|e| e.into_inner());
++    TOLD.call_once(|| {
++        let lowest = pool.iter().map(|p| p.0).min().unwrap_or(0);
++        tracing::info!(
++            pieces = pool.len(),
++            lowest = format_args!("{lowest:#x}"),
++            "address space for memory shaders read by address, reserved at the start"
++        );
++    });
++    let (start, used) = pool.iter_mut().find(|(_, used)| EARLY_PIECE - *used >= len)?;
++    let want = *start + *used;
++    // SAFETY: committing pages of our own reservation, none handed out before.
++    let at = unsafe { VirtualAlloc(want as *const _, len, MEM_COMMIT, PAGE_READWRITE) } as usize;
++    (at == want).then(|| {
++        *used += len;
++        at
++    })
++}
++
++/// Fresh zeroed memory in [4 GiB, 2^37) (where the directory of memory by
++/// address reaches, `MEMORY_PAGES`), write-watched as the title's own
++/// pools are (copies then take only written pages). From [`EARLY`], then
++/// the pool, then wherever the window has room. A search of a full window
++/// takes long in the kernel; after one failed, none is made for a second
++/// (PR #88: thousands of searches a frame, 30 s frames, the title's
++/// watchdog).
++pub(crate) fn reserve(len: usize) -> Option<usize> {
++    use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
++    use windows_sys::Win32::System::Memory::{MEM_COMMIT, MEM_RESERVE};
++    static FAILED_AT_MS: AtomicU64 = AtomicU64::new(0);
++    static FAILURES: AtomicU64 = AtomicU64::new(0);
++    static START: OnceLock<std::time::Instant> = OnceLock::new();
++    reserve_space();
++    if let Some(at) = from_early(len).or_else(|| from_pool(len)) {
++        return Some(at);
++    }
++    let now = START.get_or_init(std::time::Instant::now).elapsed().as_millis() as u64 + 1;
++    let failed = FAILED_AT_MS.load(Relaxed);
++    if failed != 0 && now < failed + 1000 {
++        return None;
++    }
++    match allocate_in_window(len, MEM_RESERVE | MEM_COMMIT | MEM_WRITE_WATCH) {
++        Ok(at) => Some(at),
++        Err(error) => {
++            FAILED_AT_MS.store(now, Relaxed);
++            let n = FAILURES.fetch_add(1, Relaxed) + 1;
++            if n.is_power_of_two() {
++                tracing::warn!(
++                    bytes = len,
++                    error,
++                    times = n,
++                    "no room left below 2^37 for memory shaders read by address; none looked for again for a second"
++                );
++            }
++            None
++        }
++    }
+ }
+ 
+ impl Upload {
+@@ -99,7 +241,13 @@ impl Upload {
+             Some(place) => place,
+             None => {
+                 let blocks = n.max(ARENA / BLOCK);
+-                let at = reserve(blocks * BLOCK)?;
++                let Some(at) = reserve(blocks * BLOCK) else {
++                    // Better than null, which the title throws on, ending
++                    // the game: its shaders may read zeros from this.
++                    static TOLD: std::sync::Once = std::sync::Once::new();
++                    TOLD.call_once(|| tracing::warn!(bytes = len, "an upload from the process heap instead: ray tracing may miss some of it"));
++                    return Some(Upload(Kind::Heap(vec![0; len])));
++                };
+                 crate::shadow::register(at, at as u64, (blocks * BLOCK) as u64);
+                 tracing::info!(at = format_args!("{at:#x}"), bytes = blocks * BLOCK, "memory for lists' uploads, where shaders reach it by address");
+                 arenas.push(Arena { at, taken: vec![false; blocks] });
+@@ -169,6 +317,25 @@ mod tests {
+         drop(b);
+     }
+ 
++    #[test]
++    fn the_pool_is_reserved_in_the_window_and_handed_out_once() {
++        reserve_space();
++        assert!(!POOL.lock().unwrap().is_empty(), "the pool is reserved");
++        let a = reserve(100).unwrap();
++        let b = reserve(BLOCK).unwrap();
++        // Larger than a piece: from the window.
++        let c = reserve(EARLY_PIECE + BLOCK).unwrap();
++        for at in [a, b, c] {
++            assert!(at >= 1 << 32 && at + BLOCK <= 1 << 37 && at.is_multiple_of(BLOCK));
++        }
++        assert!(a != b);
++        // SAFETY: committed, at least a block each.
++        unsafe {
++            assert_eq!(*(a as *const u8), 0);
++            (b as *mut u8).add(BLOCK - 1).write(7);
++        }
++    }
++
+     #[test]
+     fn a_gap_is_blocks_side_by_side() {
+         assert_eq!(gap(&[true, false, true, false, false, true], 1), Some(1));
+diff --git a/crates/victory-hle/src/lib.rs b/crates/victory-hle/src/lib.rs
+index f3d70bfe14e1df736199483ab65dc24819855a50..08c951a63ee08962233ee1c7b08b4d78cdae9f1e 100644
+--- a/crates/victory-hle/src/lib.rs
++++ b/crates/victory-hle/src/lib.rs
+@@ -27,6 +27,8 @@ pub use victory_gpu::console;
+ /// DLSS and frame generation (`VICTORY_DLSS`, `VICTORY_FRAMEGEN`).
+ #[cfg(windows)]
+ pub use victory_gpu::streamline;
++#[cfg(windows)]
++pub use victory_gpu::reserve_upload_space;
+ #[cfg(all(windows, feature = "diagnostics"))]
+ pub use victory_gpu::replay;
+ 
