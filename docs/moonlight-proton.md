@@ -86,6 +86,30 @@ export VICTORY_POOL_SCALE=2
 
 The first boot with this setting applied 632 call-site changes. At initialization, the three affected allocations requested 45,000 slots instead of 22,500, 100,000 instead of 50,000, and 131,056 instead of 98,000. The last allocation reached the cap for 17-bit slot indices.
 
+### Combined NVIDIA and VItoriaBr build
+
+The [combined patch](../contrib/moonlight/combined-runtime.patch) applies to [`cd9355206de35baeab822ce9bb2bbac7e8354eb6`](https://github.com/fxceless/victory-fork/commit/cd9355206de35baeab822ce9bb2bbac7e8354eb6) of `fxceless/victory-fork`. That revision incorporates the NVIDIA rendering changes and the frame-rate override derived from the 7900 XTX fork. The patch carries the Wine pipeline-library fix and optional larger instance pools forward. It also integrates VItoriaBr's [placed 3D texture and alias fix](https://github.com/uiliannn/VItoriaBr/commit/b6e61ab6311a6eed6c4c138a5cf6fd88339acba7) and [cache/profile separation check](https://github.com/uiliannn/VItoriaBr/commit/30d9ba1a643e82da2a48fa4ce706eec9fcc6780a).
+
+Apply this patch by itself on the specified revision and use the same Linux build command. Use a separate cache and a copy of the title profile for the first boot.
+
+~~~bash
+git checkout cd9355206de35baeab822ce9bb2bbac7e8354eb6
+git apply --check /path/to/VIctory/contrib/moonlight/combined-runtime.patch
+git apply /path/to/VIctory/contrib/moonlight/combined-runtime.patch
+
+export VICTORY_POOL_SCALE=2 VICTORY_RENDER_1080P=1
+export VICTORY_BVH_BUILDER=0 VICTORY_DLSS=0 VICTORY_FRAMEGEN=0
+export VICTORY_DYNAMIC_WAIT=1 VICTORY_THIN=1 VICTORY_RELAY=2 VICTORY_RELAY_COPY=1
+export VICTORY_SOFT_VIEWS=copies VICTORY_PRELUDE_UPLOADS=1 VICTORY_AMBIENT=0.8
+export VICTORY_CARD_BUFFERS_MB=1024 VICTORY_TEXTURE_BUDGET_MB=8192
+~~~
+
+The title reported a 1920×1080 internal scene and 2560×1440 SDR output. The Sunshine capture display continued to run at 1280×800. The 16 `victory-core` tests passed. A focused `victory-gpu` test under Proton checked that a placed 3D unordered view uses a host texture and that a shader view reads the alias. The port still dropped draws and ran at single-digit frame rates in the intro.
+
+### Launchers
+
+[VILauncher](https://github.com/dazacode/vilauncher) builds and launches selected projects on Windows. [SixLauncher](https://github.com/SixLauncher/launcher) also supports Proton on Linux and accepts a locally built runtime. On the test host, its `v0.1.139` release generated a dry-run command for the combined executable and existing GE-Proton11-14. The boot results below use the UMU launcher with the rendering GPU selected explicitly.
+
 ## Boot and stream results
 
 Measurements below use the host's frame counter. The video stream has its own frame rate.
@@ -104,6 +128,10 @@ Measurements below use the host's frame counter. The video stream has its own fr
 | Windows Moonlight 6.2.0 on the permanent endpoint, `93db653` | Paired, launched the same app, and streamed over HEVC. With the texture memory fallback enabled, parts of loading reached 55–90 FPS and the 3D intro became visible. The intro generally ran below 1 FPS with missing lighting and materials. After about 15 minutes the title hit breakpoint `0x80000003` and its crash report showed `INSTANCE_LIST` at 45,000/45,000. |
 | Windows Moonlight cold-cache restart, `52ac4ec` | The Moonlight app list relaunched the same tile after the update. Sunshine connected over HEVC, the three frame hooks applied, and the host rebuilt its pipeline cache. Parts of loading exceeded 60 FPS. The intro still ran below 1 FPS. The title stopped after 17 minutes with the same breakpoint and `INSTANCE_LIST` at 45,000/45,000. |
 | Local VItoriaBr Proton run, `1361e190` | The title accepted a reported display mode of 1920×1080 and reached the 3D intro. The intro remained below 1 FPS. A concurrent workload occupied about 8.6 GB on the rendering GPU for much of this run. After it released that memory, the game still stopped at `0x80000003` with the same 45,000/45,000 instance pool. |
+| VItoriaBr with twice the instance-pool capacity | Reached the intro and ran for 12 minutes before a deliberate stop. The earlier breakpoint was absent in that run. Median intro performance was 0.3 FPS over 54 intervals with at least 1,000 draws per frame. |
+| VItoriaBr with larger pools and the submission preset | Ran through the 15-minute test without the earlier breakpoint. Median performance was 0.4 FPS over 92 intervals with at least 1,000 draws per frame. |
+| Newer NVIDIA base with the Proton and pool changes | Booted from a fresh runtime cache and reached the 3D intro. The run was stopped after about four minutes to test the VItoriaBr texture changes. The median was 1.6 FPS over 26 intervals with at least 1,000 draws per frame. |
+| Combined build with VItoriaBr texture changes | Reused a copy of the previous run's shader and pipeline cache and reached the 3D intro. The median at the first checkpoint was 2.0 FPS over 22 intervals with at least 1,000 draws per frame. The warm cache and scene timing can both affect this comparison. |
 
 For log intervals with at least 200 draws per frame, the median frame time was 3,551 ms on `93db653` (91 intervals) and 2,905 ms on `52ac4ec` (93 intervals). The shots and draw counts varied between runs. Copy preparation and read-back remained the largest measured costs.
 
