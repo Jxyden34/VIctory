@@ -124,6 +124,17 @@ The follow-up release build compiled for the Proton target. Proton tests passed 
 
 The `upscaler-check --device` command completed three DLSS Super Resolution evaluations under GE-Proton on the rendering GPU using the signed NVIDIA Streamline 2.14.16 package. The SDK is supplied separately. The DLSS Quality game boot selected a 1706×960 internal scene at 2560×1440 SDR output, and the runtime logged DLSS replacing the game's FidelityFX dispatch. The test uses the existing instance-pool and Proton fixes, with ray tracing and frame generation off. [NVIDIA Streamline 2.14.16](https://github.com/NVIDIA-RTX/Streamline/releases/tag/v2.14.16)
 
+### Proton write-watch follow-up
+
+The [write-watch patch](../contrib/moonlight/proton-write-watch.patch) applies after `nvidia-lighting.patch`. It adapts the upstream reservation-aware batching and worker-path changes. The Wine fallback for querying reserved pages is limited to the missing information-class error. The comparison used `VICTORY_AHEAD_GAP_KB=256`. Two focused Proton tests covered observing writes after an earlier copy and recognizing when an unmapped block is mapped again. [NVIDIA pull request #207](https://github.com/trustno1-coder/VIctory-NVIDIA/pull/207)
+
+| Private DLSS Quality run | Intervals with at least 1,000 draws/frame | Median FPS | Median preparation | Median queries about memory holes |
+| --- | ---: | ---: | ---: | ---: |
+| Control | 35 | 2.4 | 263 ms | 7,563 |
+| Write-watch patch | 25 | 2.7 | 124 ms | 78 |
+
+The two starts used different cache warmth and progressed through different shots. The measured drop in memory queries is specific to these runs. Playable performance and the patched build's Deck stream remain unverified.
+
 ### Launchers
 
 [VILauncher](https://github.com/dazacode/vilauncher) builds and launches selected projects on Windows. [SixLauncher](https://github.com/SixLauncher/launcher) also supports Proton on Linux and accepts a locally built runtime. On the test host, its `v0.1.139` release generated a dry-run command for the combined executable and existing GE-Proton11-14. The boot results below use the UMU launcher with the rendering GPU selected explicitly.

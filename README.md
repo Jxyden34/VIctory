@@ -14,9 +14,9 @@ This branch documents a Linux host running VIctory under GE-Proton11-14. A Windo
 
 - The combined VIctory-NVIDIA and VItoriaBr build reached roughly 2–3 FPS in recent intro scenes and passed the previous instance-pool crash point. Lighting and materials are still incomplete, and playable performance remains unverified.
 - The NVIDIA follow-up got past the ray-tracing watchdog in a private Proton run. All 53 structure-builder pipelines were available. The 1080p intro had a median of 0.8 FPS across 23 intervals with at least 1,000 draws per frame. A 720p FidelityFX test hit a divide-by-zero during loading. [NVIDIA watchdog fix](https://github.com/trustno1-coder/VIctory-NVIDIA/pull/88) · [NVIDIA texture fix](https://github.com/trustno1-coder/VIctory-NVIDIA/pull/58)
-- NVIDIA DLSS Super Resolution ran on the RTX 3060 under Proton and took over the game's upscaling at 1706×960 internal resolution and 2560×1440 output. The intro still ran mostly in the low single digits. The next comparison targets expensive memory queries under Wine. [Proton memory performance patch](https://github.com/trustno1-coder/VIctory-NVIDIA/pull/207)
+- NVIDIA DLSS Super Resolution took over the game's upscaling at 1706×960 internal resolution and 2560×1440 output. With the Proton write-watch changes, the observed median was 2.7 FPS in heavy intro scenes, compared with 2.4 FPS on the DLSS control run. Median frame preparation fell from 263 ms to 124 ms. The samples came from separate runs with different shader-cache and scene timing. [Proton memory performance patch](https://github.com/trustno1-coder/VIctory-NVIDIA/pull/207)
 
-[Build steps and boot log](docs/moonlight-proton.md) · [Combined runtime patch](contrib/moonlight/combined-runtime.patch) · [NVIDIA lighting patch](contrib/moonlight/nvidia-lighting.patch)
+[Build steps and boot log](docs/moonlight-proton.md) · [Combined runtime patch](contrib/moonlight/combined-runtime.patch) · [NVIDIA lighting patch](contrib/moonlight/nvidia-lighting.patch) · [Proton write-watch patch](contrib/moonlight/proton-write-watch.patch)
 
 ## Upstream Windows status (2026-11-25)
 
