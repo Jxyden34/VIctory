@@ -162,6 +162,16 @@ A second run used the same Series S configuration with its warmed cache. The add
 
 The run stopped by timer after four minutes. NVIDIA Xid errors were absent. Across 28 intervals with at least 1,000 draws per frame, the median was 3.5 FPS, 283 ms per frame and 34 ms of frame preparation. Stable gameplay and Steam Deck playback of this build remain unverified.
 
+### Sunshine launcher update
+
+A separate Series S run used `--series-s --dlss quality --fps 1000` with the same NVIDIA build. The game rendered at 1280×720 internally and the renderer composed 1920×1080 output. The run reached the intro and stopped by timer after 4 minutes 5 seconds. The median across 29 intervals with at least 1,000 draws per frame was 3.5 FPS, 289 ms per frame and 37 ms of preparation. NVIDIA Xid errors were absent. The matching median at 540p made 720p the sharper preset for this host.
+
+The permanent **GTA VI (Experimental)** Sunshine entry now points to this preset. The host launcher uses the existing interactive save directory and leaves menu navigation to the player. The prior launcher and save snapshot were backed up locally. Launching with the real profile on the Sunshine display reached 1080p output with DLSS Quality during a 32-second host check. Sunshine remained active and enabled. Steam Deck controls and stream performance on this build still need an on-device test.
+
+### FiveNine Linux build on NVIDIA
+
+The Linux-focused build at `030b1415` reached 3D scenes on the RTX 3060 using the Series S preset and the patched GE-Proton wineserver. It accepted Return from the host keyboard to advance the startup prompt. The renderer composed 1920×1080 output. With a fresh cache, 26 intervals with at least 1,000 draws per frame had a median of 0.5 FPS, 1,931 ms per frame and 189 ms of frame preparation. Hundreds of pipelines were still compiling when the timed run ended. NVIDIA Xid errors were absent. The timing describes the cold intro, and a warmed run of this fork on NVIDIA remains unmeasured. [FiveNine Linux setup and benchmark](https://github.com/FiveNine/victory-proton/blob/030b1415980d6ebb986152626c4b1cb161ca35e3/LINUX.md)
+
 ### Launchers
 
 [VILauncher](https://github.com/dazacode/vilauncher) builds and launches selected projects on Windows. [SixLauncher](https://github.com/SixLauncher/launcher) also supports Proton on Linux and accepts a locally built runtime. On the test host, its `v0.1.139` release generated a dry-run command for the combined executable and existing GE-Proton11-14. The boot results below use the UMU launcher with the rendering GPU selected explicitly.
