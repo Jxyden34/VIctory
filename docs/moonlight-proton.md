@@ -150,6 +150,18 @@ The original DLSS Quality renderer and Proton write-watch build were used in bot
 
 The intro shots and cache warmth varied across the runs. The measured median frame rates were within 0.1 FPS. Deck playback of this build is unverified.
 
+### NVIDIA Series S profile
+
+The newer NVIDIA build at `63b902fe` was compiled with Rust 1.98.1 for `x86_64-pc-windows-gnullvm` and run with GE-Proton11-14. The native D3DCompiler and NVIDIA Streamline package were supplied locally. The device check passed three DLSS evaluations on the RTX 3060. The launch used the upstream `play` preset with `--series-s --dlss performance --fps 1000`. [NVIDIA Series S update](https://github.com/trustno1-coder/VIctory-NVIDIA/commit/63b902fe1720a5188ee79d94a88c8de0470f6349)
+
+The renderer accepted 960×540 internal resolution, composed 1920×1080 output, and recorded successful DLSS evaluations in 3D scenes. Frame generation was off. The timed run reached the intro and stopped after 5 minutes 35 seconds, with zero NVIDIA Xid errors. Across 43 intervals with at least 1,000 draws per frame, the median was 3.5 FPS, 285 ms per frame and 35 ms of frame preparation. The earlier Series X run used a different renderer revision, internal resolution and cache, so this comparison measures the two configurations as a whole.
+
+### Direct graphics memory
+
+A second run used the same Series S configuration with its warmed cache. The additional launch flags were `--set VICTORY_PORT_CONSTANTS=1 --set VICTORY_INPLACE_PROBE=1 --set VICTORY_INPLACE_PROBE_MB=4`. The probe verified that CPU and GPU reads and writes worked through both private memory and a committed section. The game opened 185 MB of graphics memory as a host heap and used it directly for a buffer. Pixel statistics from the host display confirmed nonblank 3D output. [Renderer memory implementation](https://github.com/trustno1-coder/VIctory-NVIDIA/blob/63b902fe1720a5188ee79d94a88c8de0470f6349/crates/victory-gpu/src/port.rs)
+
+The run stopped by timer after four minutes. NVIDIA Xid errors were absent. Across 28 intervals with at least 1,000 draws per frame, the median was 3.5 FPS, 283 ms per frame and 34 ms of frame preparation. Stable gameplay and Steam Deck playback of this build remain unverified.
+
 ### Launchers
 
 [VILauncher](https://github.com/dazacode/vilauncher) builds and launches selected projects on Windows. [SixLauncher](https://github.com/SixLauncher/launcher) also supports Proton on Linux and accepts a locally built runtime. On the test host, its `v0.1.139` release generated a dry-run command for the combined executable and existing GE-Proton11-14. The boot results below use the UMU launcher with the rendering GPU selected explicitly.
