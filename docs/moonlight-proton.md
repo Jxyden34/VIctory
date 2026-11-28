@@ -135,6 +135,21 @@ The [write-watch patch](../contrib/moonlight/proton-write-watch.patch) applies a
 
 The two starts used different cache warmth and progressed through different shots. The measured drop in memory queries is specific to these runs. Playable performance and the patched build's Deck stream remain unverified.
 
+### GE-Proton memory views
+
+The [wineserver patch](../contrib/moonlight/ge-proton-wineserver-views.patch) adds a red-black tree for memory-view lookups. It keeps the existing list for enumeration and preserves GE-Proton's host page alignment check. The patch adapts an upstream Wine change and a Proton backport. [Wine commit](https://github.com/wine-mirror/wine/commit/3217449b1f719c8f7a73a6de768df536495ddcbf) · [FiveNine's Proton patch](https://github.com/FiveNine/victory-proton/blob/030b1415980d6ebb986152626c4b1cb161ca35e3/linux/wineserver-views-rbtree.patch)
+
+Use the GE-Proton11-14 release's Wine and Wine Staging pins with its Wine preparation steps in the release build script. The Valve Wine base alone generated server protocol 931 and the installed GE client rejected it. GE's release patch stack generated protocol 938. Apply this patch to the prepared Wine tree with `git apply`, then run `./autogen.sh`. The test configured a separate Debian 12 build directory with `--enable-win64 --without-mingw` and ran `make -j8 server/wineserver`. The resulting binary went into a copy of GE-Proton11-14 at `files/bin/wineserver`. The test used its own Wine prefix. [GE-Proton11-14 release](https://github.com/GloriousEggroll/proton-ge-custom/releases/tag/GE-Proton11-14) · [Release preparation script](https://github.com/GloriousEggroll/proton-ge-custom/blob/GE-Proton11-14/patches/protonprep-valve-staging.sh)
+
+The original DLSS Quality renderer and Proton write-watch build were used in both runs. The updated wineserver passed the three-evaluation DLSS device check, and its process was confirmed during the title run. The benchmark ended by timer after 3 minutes 55 seconds. The host logged zero NVIDIA Xid errors during the run.
+
+| Proton wineserver | Intervals with at least 1,000 draws/frame | Median FPS | Median frame time | Median preparation |
+| --- | ---: | ---: | ---: | ---: |
+| GE-Proton11-14 stock | 25 | 2.7 | 374 ms | 124 ms |
+| GE-Proton11-14 with memory-view patch | 30 | 2.6 | 384 ms | 113 ms |
+
+The intro shots and cache warmth varied across the runs. The measured median frame rates were within 0.1 FPS. Deck playback of this build is unverified.
+
 ### Launchers
 
 [VILauncher](https://github.com/dazacode/vilauncher) builds and launches selected projects on Windows. [SixLauncher](https://github.com/SixLauncher/launcher) also supports Proton on Linux and accepts a locally built runtime. On the test host, its `v0.1.139` release generated a dry-run command for the combined executable and existing GE-Proton11-14. The boot results below use the UMU launcher with the rendering GPU selected explicitly.

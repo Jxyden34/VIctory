@@ -8,15 +8,16 @@ the platform underneath it and converts the title's data, ahead of time where
 it can (shaders and pipelines too, see Getting started) and on first use
 otherwise. See [docs/architecture.md](docs/architecture.md).
 
-## Sunshine and Moonlight status (2026-11-27)
+## Sunshine and Moonlight status (2026-11-28)
 
 This branch documents a Linux host running VIctory under GE-Proton11-14. A Windows laptop and Steam Deck both streamed the 3D intro over HEVC at 1280×800. The Steam Deck controller connected as a virtual DualSense and accepted input. One RTX 3060 rendered the game and a second encoded the streams.
 
 - The combined VIctory-NVIDIA and VItoriaBr build reached roughly 2–3 FPS in recent intro scenes and passed the previous instance-pool crash point. Lighting and materials are still incomplete, and playable performance remains unverified.
 - The NVIDIA follow-up got past the ray-tracing watchdog in a private Proton run. All 53 structure-builder pipelines were available. The 1080p intro had a median of 0.8 FPS across 23 intervals with at least 1,000 draws per frame. A 720p FidelityFX test hit a divide-by-zero during loading. [NVIDIA watchdog fix](https://github.com/trustno1-coder/VIctory-NVIDIA/pull/88) · [NVIDIA texture fix](https://github.com/trustno1-coder/VIctory-NVIDIA/pull/58)
 - NVIDIA DLSS Super Resolution took over the game's upscaling at 1706×960 internal resolution and 2560×1440 output. With the Proton write-watch changes, the observed median was 2.7 FPS in heavy intro scenes, compared with 2.4 FPS on the DLSS control run. Median frame preparation fell from 263 ms to 124 ms. The samples came from separate runs with different shader-cache and scene timing. [Proton memory performance patch](https://github.com/trustno1-coder/VIctory-NVIDIA/pull/207)
+- A GE-Proton11-14 backport replaced Wine's linear memory-view scans with a tree lookup. In this host test, frame preparation dropped from 124 ms to 113 ms, while median intro performance stayed around 2.6–2.7 FPS. The patched tool passed a DLSS device check and ran through a timed intro benchmark. [Wine memory-view change](https://github.com/wine-mirror/wine/commit/3217449b1f719c8f7a73a6de768df536495ddcbf)
 
-[Build steps and boot log](docs/moonlight-proton.md) · [Combined runtime patch](contrib/moonlight/combined-runtime.patch) · [NVIDIA lighting patch](contrib/moonlight/nvidia-lighting.patch) · [Proton write-watch patch](contrib/moonlight/proton-write-watch.patch)
+[Build steps and boot log](docs/moonlight-proton.md) · [Combined runtime patch](contrib/moonlight/combined-runtime.patch) · [NVIDIA lighting patch](contrib/moonlight/nvidia-lighting.patch) · [Proton write-watch patch](contrib/moonlight/proton-write-watch.patch) · [GE-Proton wineserver patch](contrib/moonlight/ge-proton-wineserver-views.patch)
 
 ## Upstream Windows status (2026-11-25)
 
