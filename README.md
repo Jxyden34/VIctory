@@ -21,13 +21,7 @@ This branch documents a Linux host running VIctory under GE-Proton11-14. A Windo
 
 [Build steps and boot log](docs/moonlight-proton.md) · [Combined runtime patch](contrib/moonlight/combined-runtime.patch) · [NVIDIA lighting patch](contrib/moonlight/nvidia-lighting.patch) · [Proton write-watch patch](contrib/moonlight/proton-write-watch.patch) · [GE-Proton wineserver patch](contrib/moonlight/ge-proton-wineserver-views.patch)
 
-## Upstream Windows status (2026-11-25)
 
-**Not playable yet, because of the framerate: about 1 frame per second in the
-world.** Nothing else keeps the game from working: the title boots, runs its
-menus at its own 30 fps, loads the world, plays the intro cutscene and
-reaches the **prologue**, the mission after it, with the graphics fully
-displayed. 
 
 | Stage | State |
 |-------|-------|
