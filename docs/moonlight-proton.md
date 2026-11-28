@@ -164,9 +164,34 @@ The run stopped by timer after four minutes. NVIDIA Xid errors were absent. Acro
 
 ### Sunshine launcher update
 
-A separate Series S run used `--series-s --dlss quality --fps 1000` with the same NVIDIA build. The game rendered at 1280×720 internally and the renderer composed 1920×1080 output. The run reached the intro and stopped by timer after 4 minutes 5 seconds. The median across 29 intervals with at least 1,000 draws per frame was 3.5 FPS, 289 ms per frame and 37 ms of preparation. NVIDIA Xid errors were absent. The matching median at 540p made 720p the sharper preset for this host.
+A separate Series S run used `--series-s --dlss quality --fps 1000` with the same NVIDIA build. The game rendered at 1280×720 internally and the renderer composed 1920×1080 output. The run reached the intro and stopped by timer after 4 minutes 5 seconds. The completed log had 30 intervals with at least 1,000 draws per frame. The median was 3.5 FPS, 289 ms per frame and 36 ms of preparation. NVIDIA Xid errors were absent. The matching median at 540p made 720p the sharper preset for this host.
 
 The permanent **GTA VI (Experimental)** Sunshine entry now points to this preset. The host launcher uses the existing interactive save directory and leaves menu navigation to the player. The prior launcher and save snapshot were backed up locally. Launching with the real profile on the Sunshine display reached 1080p output with DLSS Quality during a 32-second host check. Sunshine remained active and enabled. Steam Deck controls and stream performance on this build still need an on-device test.
+
+### Render queue scheduling
+
+The host's D3D12 telemetry showed the title waiting roughly 220 ms per frame at presentation while the submission thread spent about 30 ms preparing lists in the sampled late intro. The GPU queue reported long gaps without submitted work. A comparison on the Ryzen 9 5950X kept the same 720p DLSS Quality preset and cache configuration. It increased `VICTORY_THIN_THREADS` and `VICTORY_JOIN_PARTS` from 8 to 16.
+
+| 720p DLSS Quality configuration | Intervals with at least 1,000 draws/frame | Median FPS | Median frame time | Median preparation |
+| --- | ---: | ---: | ---: | ---: |
+| Stock preset, completed log | 30 | 3.5 | 289 ms | 36 ms |
+| 16 translation workers, 16 joined parts | 28 | 3.5 | 289 ms | 37 ms |
+
+The tuned run reached the intro and ended by timer after 3 minutes 50 seconds. NVIDIA Xid errors were absent. The change did not improve the measured median frame rate.
+
+### Pipeline compilation waits
+
+The same NVIDIA revision was built with `--features diagnostics` in a separate target directory. The first capture hit an access violation in Wine's `dbghelp.dll` symbol reader. Setting `dbghelp=` in `WINEDLLOVERRIDES` for the diagnostic launcher allowed all three frame traces to be written. The traces and title data stayed local.
+
+The recording thread counters repeatedly reported about 500 ms of accumulated pipeline compilation waits per frame across the workers. The trace showed the present queue waiting behind this work. `VICTORY_PIPELINE_WAIT_MS` is the shared wait budget for ordinary pipelines and defaults to 500 ms. The renderer gives screen-priority passes their own wait budget. [Pipeline wait implementation](https://github.com/trustno1-coder/VIctory-NVIDIA/blob/63b902fe1720a5188ee79d94a88c8de0470f6349/crates/victory-gpu/src/pipeline/make.rs)
+
+### Shorter pipeline wait on the release build
+
+An isolated repeat of the 720p DLSS Quality test used `--set VICTORY_PIPELINE_WAIT_MS=8`. The median was 9.5 FPS and 106 ms per frame over 13 intervals with at least 1,000 draws per frame. The fastest interval was 13.6 FPS. The median share of direct draws dropped without a host pipeline was 8.6%, against 8.3% in the stock run. Scene progression and cache timing differed, and the last interval had more missing pipelines than the earlier intervals.
+
+After about 2 minutes 18 seconds, the rendering GPU logged Xid 109, a context-switch timeout. Presentation stopped and the title later exited at its watchdog null write. The specific GPU workload that caused the timeout remains unverified. The 8 ms setting remains an isolated test. [NVIDIA Xid reference](https://docs.nvidia.com/deploy/xid-errors/620/analyzing-xid-catalog.html) · [Upstream report on the title watchdog](https://github.com/Marvisak/VIctory/issues/844)
+
+A live Moonlight client subsequently launched the regular 720p preset via the permanent Sunshine tile and connected over HEVC NVENC. That session reached 3D scenes at a 3.4 FPS median across seven heavy intervals and disconnected normally after about 94 seconds. The tester confirmed it was a different device from the Steam Deck.
 
 ### FiveNine Linux build on NVIDIA
 
