@@ -1,0 +1,73 @@
+Optional per-pipeline wait budget for VIctory-NVIDIA
+
+Base: trustno1-coder/VIctory-NVIDIA 63b902fe1720a5188ee79d94a88c8de0470f6349
+Adapted from: https://github.com/Maykzera/victory-rtx3060/blob/44fed2c78cc851d9bcf218ba48d705b5defc4d97/crates/victory-gpu/src/pipeline/make.rs
+Enable with VICTORY_PIPELINE_WAIT_ONCE=1. This version reserves wait time under the existing shared budget lock and uses the per-pipeline cap for ordinary pipelines.
+
+diff --git a/crates/victory-gpu/src/pipeline/make.rs b/crates/victory-gpu/src/pipeline/make.rs
+index 226f478..09e321e 100644
+--- a/crates/victory-gpu/src/pipeline/make.rs
++++ b/crates/victory-gpu/src/pipeline/make.rs
+@@ -37,6 +37,8 @@ pub(crate) struct Pending {
+     queue_state: AtomicU8,
+     /// Taken by a worker from [`Queue::slow`].
+     was_slow: AtomicBool,
++    /// Time already spent or reserved for this pipeline's optional wait budget.
++    waited_us: AtomicU64,
+     made: OnceLock<Option<HostPipeline>>,
+     /// What identifies it across runs (shader containers and state), and
+     /// whether a draw or dispatch has requested it yet.
+@@ -173,6 +175,7 @@ impl Pending {
+             graphics,
+             queue_state: AtomicU8::new(NOT_QUEUED),
+             was_slow: AtomicBool::new(false),
++            waited_us: AtomicU64::new(0),
+             made: OnceLock::new(),
+             key: key.finalize().to_hex()[..32].to_owned(),
+             used: AtomicBool::new(false),
+@@ -348,6 +351,12 @@ fn shared_budget() -> bool {
+     *ON.get_or_init(|| std::env::var_os("VICTORY_PIPELINE_WAIT_SHARED").is_none_or(|v| v != "0"))
+ }
+ 
++/// Give each ordinary pipeline one cumulative wait budget for the run.
++fn wait_once() -> bool {
++    static ON: OnceLock<bool> = OnceLock::new();
++    *ON.get_or_init(|| std::env::var_os("VICTORY_PIPELINE_WAIT_ONCE").is_some_and(|v| v == "1"))
++}
++
+ /// Waits for `p` while frame `frame` has budget left.
+ fn wait(p: &Pending, frame: u64) {
+     let screen = p.screen && screens_first();
+@@ -360,12 +369,20 @@ fn wait(p: &Pending, frame: u64) {
+     static SPENT: [Mutex<(u64, Duration)>; 2] = [const { Mutex::new((u64::MAX, Duration::ZERO)) }; 2];
+     let spent_of = &SPENT[usize::from(screen)];
+     let shared = shared_budget();
++    let once = !screen && wait_once();
+     let left = {
+         let mut spent = spent_of.lock().unwrap_or_else(|e| e.into_inner());
+         if spent.0 != frame {
+             *spent = (frame, Duration::ZERO);
+         }
+-        let left = budget.saturating_sub(spent.1);
++        let mut left = budget.saturating_sub(spent.1);
++        if once {
++            let reserved = Duration::from_micros(p.waited_us.load(Ordering::Relaxed));
++            let micros = left.min(budget.saturating_sub(reserved)).as_micros();
++            let micros = u64::try_from(micros).unwrap_or(u64::MAX);
++            p.waited_us.fetch_add(micros, Ordering::Relaxed);
++            left = Duration::from_micros(micros);
++        }
+         if shared {
+             spent.1 += left;
+         }
+@@ -386,6 +403,10 @@ fn wait(p: &Pending, frame: u64) {
+     }
+     drop(held);
+     let waited = started.elapsed().min(left);
++    if once {
++        let unused_us = (left.as_micros() - waited.as_micros()) as u64;
++        p.waited_us.fetch_sub(unused_us, Ordering::Relaxed);
++    }
+     if screen && waited > Duration::from_millis(500) {
+         tracing::info!(
+             ms = waited.as_millis() as u64,

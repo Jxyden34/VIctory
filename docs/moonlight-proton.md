@@ -193,6 +193,18 @@ After about 2 minutes 18 seconds, the rendering GPU logged Xid 109, a context-sw
 
 A live Moonlight client subsequently launched the regular 720p preset via the permanent Sunshine tile and connected over HEVC NVENC. That session reached 3D scenes at a 3.4 FPS median across seven heavy intervals and disconnected normally after about 94 seconds. The tester confirmed it was a different device from the Steam Deck.
 
+### Pipeline precompilation
+
+The release build ran `warm --used --jobs 8` on a separate copy of the runtime cache. It recorded 2,031 successful builds from 2,040 requested pipeline recipes before the 390-second limit. Six recipes were recorded after their worker process ended without completing. The subsequent stock 720p benchmark used that cache. It stayed at 3.5 FPS median over 28 intervals with at least 1,000 draws per frame. The median frame took 287 ms, including 39 ms of preparation. The run ended by timer and had zero NVIDIA Xid errors.
+
+### Per-pipeline wait limit
+
+The [wait-limit patch](../contrib/moonlight/nvidia-pipeline-wait-once.patch) applies to the NVIDIA source at `63b902fe`. It adapts the RTX 3060 fork's policy of giving each unresolved pipeline a cumulative wait budget. Use `--set VICTORY_PIPELINE_WAIT_ONCE=1` with the NVIDIA `play` command to enable it for ordinary pipelines. Each wait reserves time under the existing frame-budget lock and returns any unused time. A pipeline can still be compiled and used after its budget is spent. [RTX 3060 implementation](https://github.com/Maykzera/victory-rtx3060/blob/44fed2c78cc851d9bcf218ba48d705b5defc4d97/crates/victory-gpu/src/pipeline/make.rs)
+
+The patched 720p release run lasted 6 minutes 5 seconds and ended by timer. It produced 52 intervals with at least 1,000 draws per frame, with a 10.0 FPS median, 100 ms median frame time and 17.8 FPS in the fastest interval. The median share of direct draws dropped without a host pipeline was 7.3%. Some late intervals fell to about 2–5 FPS. A private sample of the host display confirmed moving, nonblank 3D output. The driver logged zero NVIDIA Xid errors during this run.
+
+The normal-profile launcher reached 1920×1080 output with DLSS Quality in a separate 32-second boot check and was then installed for the existing Sunshine app. It uses the 720p internal preset, the prewarmed cache copy and the opt-in pipeline limit. Steam Deck playback and controller input on this build remain unverified.
+
 ### FiveNine Linux build on NVIDIA
 
 The Linux-focused build at `030b1415` reached 3D scenes on the RTX 3060 using the Series S preset and the patched GE-Proton wineserver. It accepted Return from the host keyboard to advance the startup prompt. The renderer composed 1920×1080 output. With a fresh cache, 26 intervals with at least 1,000 draws per frame had a median of 0.5 FPS, 1,931 ms per frame and 189 ms of frame preparation. Hundreds of pipelines were still compiling when the timed run ended. NVIDIA Xid errors were absent. The timing describes the cold intro, and a warmed run of this fork on NVIDIA remains unmeasured. [FiveNine Linux setup and benchmark](https://github.com/FiveNine/victory-proton/blob/030b1415980d6ebb986152626c4b1cb161ca35e3/LINUX.md)
